@@ -1,0 +1,265 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Apr  2 16:58:41 2022
+
+@author: Murilo Rocha
+"""
+
+from sklearn import metrics
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn import decomposition
+from sklearn import tree
+import seaborn as sns
+import pandas as pd
+from matplotlib import pyplot as plt
+import numpy as np
+import dice_ml
+from sklearn_extra.cluster import KMedoids
+from sklearn.metrics import silhouette_samples, silhouette_score
+from alibi.explainers import ALE, plot_ale
+from sklearn.inspection import plot_partial_dependence
+import shap 
+
+
+# PARTE 1: IMPORTANDO O CONJUNTO DE DADOS
+
+f = 'C:/Users/Murilo Rocha/Desktop/Mestrado/PPGEP - UFABC/Disciplinas/Tópicos em IA/IndianMobileJan2022.xlsx'
+df = pd.read_excel(f, sheet_name='1')
+
+feature_cols = ['lsa', 'technology', 'signal_strength','download']  # selecionando as colunas do modelo
+
+df = df[df['lsa'].str.contains("NaN|na|nan|NA") == False]
+
+for col in feature_cols:
+    df[col] = df[col].astype('category')  # convertendo de object para category
+    df[col] = df[col].cat.codes  # atribuindo valores a cada category
+   
+
+X = df[feature_cols]
+y = df.operator
+
+
+X_train, X_test, y_train, y_test = train_test_split(
+X, y, test_size=0.3, random_state=1)
+
+
+# PARTE 2: CHECANDO CORRELAÇÕES ENTRE VARIÁVEIS
+
+df2 = df.iloc[:, 1:6]
+corr_df = df2.corr(method='pearson')
+
+plt.figure(figsize=(8, 6))
+sns.heatmap(corr_df, annot=True, cmap="YlGnBu")
+plt.show()
+
+# feature_cols = ['lsa'] #deixando apenas colunas desejadas
+plt.close()
+
+# PARTE 3: CRIANDO O MODELO DE ÁRVORE DE DECISÃO
+
+clf = DecisionTreeClassifier(class_weight=None, criterion='gini', max_depth=11,
+                             max_features=None, max_leaf_nodes=None,
+                             min_impurity_decrease=0.0, min_impurity_split=None,
+                             min_samples_leaf=1, min_samples_split=2,
+                             min_weight_fraction_leaf=0.0, random_state=None,
+                             splitter='best')
+
+
+clf = clf.fit(X_train, y_train)
+y_pred = clf.predict(X_test)
+DT_score = clf.score(X_test, y_test)
+print("DT Accuracy: {:.1%}".format(DT_score))
+
+# PARTE 4: PLOTANDO A ÁRVORE DE DECISÃO CRIADA
+
+
+fig = plt.figure(figsize=(35, 30))
+_ = tree.plot_tree(clf,
+                   feature_names=feature_cols,
+                   class_names=['JIO', 'Vi India', 'AIRTEL', 'BSNL'],
+                   filled=True)
+fig.savefig("decistion_tree.png")
+
+# PARTE 5: OTIMIZANDO HIPERPARÂMETROS DA ÁRVORE DE DECISÃO COM GRID SEARCH
+
+std_slc = StandardScaler()
+pca = decomposition.PCA()
+dec_tree = tree.DecisionTreeClassifier()
+
+pipe = Pipeline(steps=[('std_slc', std_slc),
+                       ('pca', pca),
+                       ('dec_tree', dec_tree)])
+
+n_components = list(range(1, X.shape[1]+1, 1))
+criterion = ['gini', 'entropy']
+max_depth = [2, 4, 6, 7, 8, 9, 10, 11, 12]
+
+parameters = dict(pca__n_components=n_components,
+                  dec_tree__criterion=criterion,
+                  dec_tree__max_depth=max_depth)
+
+clf_GS = GridSearchCV(pipe, parameters)
+clf_GS.fit(X, y)
+
+print('Best Criterion:', clf_GS.best_estimator_.get_params()
+      ['dec_tree__criterion'])
+print('Best max_depth:', clf_GS.best_estimator_.get_params()
+      ['dec_tree__max_depth'])
+print('Best Number Of Components:',
+      clf_GS.best_estimator_.get_params()['pca__n_components'])
+print(clf_GS.best_estimator_.get_params()['dec_tree'])
+
+
+# PARTE 6: CRIANDO O MODELO DE REGRESSÃO LOGÍSTICA
+
+
+logisticRegr = LogisticRegression(max_iter=5000)
+logisticRegr.fit(X_train, y_train)
+LR_score = logisticRegr.score(X_test, y_test)
+
+print("LR Accuracy: {:.1%}".format(LR_score))
+
+predictions = logisticRegr.predict(X_test)
+cm = metrics.confusion_matrix(y_test, predictions)
+plt.figure(figsize=(9, 9))
+sns.heatmap(cm, annot=True, fmt=".3f", linewidths=.5,
+            square=True, cmap='Blues_r')
+plt.ylabel('Actual label')
+plt.xlabel('Predicted label')
+all_sample_title = "LR Accuracy: {:.1%}".format(LR_score)
+plt.title(all_sample_title, size=15)
+
+# PARTE 7: CRIANDO O MODELO DE RANDOM FOREST
+
+rf = RandomForestClassifier(random_state=1,
+                            max_depth=10,
+                            min_samples_split=15,
+                            min_samples_leaf=1
+                            )
+
+rf.fit(X_train, y_train)
+
+y_pred = rf.predict(X_test)
+
+RF_score = rf.score(X_test, y_test)
+
+print("RF Accuracy: {:.1%}".format(RF_score))
+
+# PARTE 8: OTIMIZANDO HIPERPARÂMETROS DA RANDOM FOREST COM GRID SEARCH
+
+
+n_estimators = [100]
+max_depth = [2, 3, 4, 5, 6, 7, 8, 9, 10]
+min_samples_split = [2, 5, 10, 15, 100]
+min_samples_leaf = [1, 2, 5, 10]
+
+hyperF = dict(n_estimators = n_estimators, max_depth = max_depth,
+              min_samples_split = min_samples_split,
+             min_samples_leaf = min_samples_leaf)
+
+gridF = GridSearchCV(rf, hyperF, cv = 3, verbose = 1,
+                      n_jobs = -1)
+bestF = gridF.fit(X_train, y_train)
+
+print('Best Sample Split:', gridF.best_estimator_.get_params()['min_samples_split'])
+print('Best Sample Leaf:', gridF.best_estimator_.get_params()['min_samples_leaf'])
+print('Best max_depth:', gridF.best_estimator_.get_params()['max_depth'])
+'''
+
+# PARTE 9: CRIANDO O MODELO DE K-NN
+
+'''
+knn = KNeighborsClassifier(n_neighbors=29)
+knn.fit(X_train, y_train)
+KNN_score = knn.score(X_test, y_test)
+
+print("K-NN Accuracy: {:.1%}".format(KNN_score))
+
+# PARTE 10: OTIMIZANDO HIPERPARÂMETROS Do KNN COM GRID SEARCH
+
+k_range = list(range(1, 31))
+param_grid = dict(n_neighbors=k_range)
+
+grid = GridSearchCV(knn, param_grid, cv=10, scoring='accuracy',
+                    return_train_score=False, verbose=1)
+
+grid_search = grid.fit(X_train, y_train)
+print(grid_search.best_params_)
+
+# PARTE 11: CRIANDO O MODELO DE NAIVE-BAYES
+
+nb = GaussianNB()
+nb.fit(X_train, y_train)
+NB_score = nb.score(X_test, y_test)
+print("NB Accuracy: {:.1%}".format(NB_score))
+
+#SEPARANDO AMOSTRAS DO DATASET
+
+X20 = X.sample(n=20)
+X50 = X.sample(n=50)
+X100 = X.sample(n=100)
+
+df['operator'] = df['operator'].astype('category')  # convertendo de object para category
+df['operator'] = df['operator'].cat.codes  # atribuindo valores a cada category
+y = df.operator
+
+feature_cols2 = ['lsa', 'technology', 'signal_strength','download']
+
+
+# PARTE 12: APLICANDO SHAP EM RF
+
+explainer = shap.TreeExplainer(rf) 
+shap_values = explainer.shap_values(X) 
+shap.summary_plot(shap_values[1], X) 
+
+# PARTE 13: APLICANDO PDP EM RF
+
+
+plot_partial_dependence(
+    rf, X20, list(range(1,5)), feature_cols, target=1,
+    response_method='predict_proba', n_jobs=-1
+)
+plot_partial_dependence(
+    rf, X50, list(range(1,5)), feature_cols, target=0,
+    response_method='predict_proba', n_jobs=-1
+)
+plot_partial_dependence(
+    rf, X100, list(range(1,5)), feature_cols, target=2,
+    response_method='predict_proba', n_jobs=-1
+)
+
+
+# PARTE 14: APLICANDO ICE EM RF
+
+feature_cols2 = ['lsa', 'technology', 'signal_strength','download']
+
+for col in feature_cols2:
+    shap.plots.partial_dependence(
+        col, rf.predict, X, ice=True,
+        model_expected_value=True, feature_expected_value=True
+        )
+
+# PARTE 15: APLICANDO ALE EM RF
+
+
+rf_ale = ALE(rf.predict, feature_names=feature_cols2)
+rf_exp = rf_ale.explain(np.array(X100))
+plot_ale(rf_exp,fig_kw={'figwidth':10,'figheight':10})
+
+
+
+#PARTE 16: APLICANDO DiCE EM RF
+
+m = dice_ml.Model(model=rf)
+d = dice_ml.Data(dataframe=X, continuous_features=feature_cols, outcome_name='operator')
+exp = dice_ml.Dice(d, m)
+exp
+'''
